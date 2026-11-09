@@ -17,7 +17,6 @@ from sklearn.metrics.pairwise import cosine_similarity
 from transformers import pipeline
 
 MAX_NEW_TOKENS = 120
-MIN_NEW_TOKENS = 15
 MIN_SIMILARITY = 0.0
 MODEL_NAME = "google/flan-t5-base"
 DEFAULT_K = 3
@@ -101,7 +100,6 @@ def generate_answer(llm, prompt):
     output = llm(
         prompt,
         max_new_tokens=MAX_NEW_TOKENS,
-        min_new_tokens=MIN_NEW_TOKENS,
         do_sample=False # make the model greedy and deterministic to avoid hallucinations
     )
     answer = output[0]["generated_text"].strip()
