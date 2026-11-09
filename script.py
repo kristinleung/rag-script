@@ -18,6 +18,7 @@ from transformers import pipeline
 
 MAX_NEW_TOKENS = 120
 ANS_STOP_MARKERS = ("Question:", "Context:", "Answer:")
+MIN_SIMILARITY = 0.0
 
 try:
     print("loading model...")
@@ -37,7 +38,7 @@ docs = [
     {"id": "5", "txt": "Vector databases store data as high-dimensional vectors and enable efficient similarity search. They are essential for modern AI applications, particularly in semantic search and retrieval systems. Common examples include Pinecone, Weaviate, and Chroma."}
 ]
 
-vectorizer = TfidfVectorizer()
+vectorizer = TfidfVectorizer(stop_words="english")
 vectors = vectorizer.fit_transform([x["txt"] for x in docs])
 
 retrieved_docs = []
@@ -81,7 +82,7 @@ def get_data():
     temp_storage["sims"] = similarities
 
     for i in indices:
-        if similarities[i] > 0:
+        if similarities[i] > MIN_SIMILARITY:
             retrieved_docs.append({"doc": docs[i], "score": float(similarities[i])})
             if len(retrieved_docs) >= k:
                 break
@@ -120,7 +121,7 @@ def call_model():
         prompt,
         max_new_tokens=MAX_NEW_TOKENS,
         do_sample=False, # make the model greedy and deterministic to avoid hallucinations
-        return_full_text=False, # return complete answer
+        return_full_text=False, # return answer only
         pad_token_id=llm.tokenizer.eos_token_id,
     )
     raw = output[0]["generated_text"]
