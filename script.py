@@ -16,12 +16,18 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from transformers import pipeline
 
+MAX_NEW_TOKENS = 120
+ANS_STOP_MARKERS = ("Question:", "Context:", "Answer:")
+
 try:
     print("loading model...")
-    llm = pipeline("text-generation", model="gpt2", max_new_tokens=256)
+    llm = pipeline("text-generation", 
+                   model="gpt2", 
+                   max_new_tokens=MAX_NEW_TOKENS)
     print("model loaded")
-except:
-    pass
+except Exception as e:
+    print(f"failed to load model: {e}", file=sys.stderr)
+    sys.exit(1)
 
 docs = [
     {"id": "1", "txt": "Python is a high-level, interpreted programming language. It was created by Guido van Rossum and first released in 1991. Python emphasizes code readability with its notable use of significant whitespace."},
@@ -96,6 +102,12 @@ if len(retrieved_docs) == 0:
         print(json.dumps({"answer": answer, "citations": retrieved_docs, "critique": {"ok": is_valid, "score": score, "problems": problems}}, indent=2))
     sys.exit(0)
 
+def clean_answer(raw: str) -> str:
+    text = raw
+    for marker in ANS_STOP_MARKERS:
+        text = text.split(marker)[0] # take first part of model answer, don't include anything folliwng that starts a new section (signalled by stop marker)
+    return " ".join(text.split())  # collapse newlines/extra spaces
+
 def call_model():
     global answer, temp_storage
     ctx = ""
@@ -104,8 +116,15 @@ def call_model():
 
     temp_storage["context"] = ctx
     prompt = "Context:\n{}\nQuestion: {}\n\nAnswer the question based only on the context above. Cite sources using the bracketed numbers in the Context given. Be concise.\n\nAnswer:".format(ctx, temp_storage['question'])
-    output = llm(prompt)
-    answer = output[0]['generated_text'].split("Answer:")[-1].strip()
+    output = llm(
+        prompt,
+        max_new_tokens=MAX_NEW_TOKENS,
+        do_sample=False, # make the model greedy and deterministic to avoid hallucinations
+        return_full_text=False, # return complete answer
+        pad_token_id=llm.tokenizer.eos_token_id,
+    )
+    raw = output[0]["generated_text"]
+    answer = raw.strip().split("\n\n")[0].strip()
 
     if answer == "":
         answer = "idk"
