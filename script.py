@@ -17,13 +17,13 @@ from sklearn.metrics.pairwise import cosine_similarity
 from transformers import pipeline
 
 MAX_NEW_TOKENS = 120
-ANS_STOP_MARKERS = ("Question:", "Context:", "Answer:")
 MIN_SIMILARITY = 0.0
+MODEL_NAME = "google/flan-t5-base"
 
 try:
     print("loading model...")
-    llm = pipeline("text-generation", 
-                   model="gpt2", 
+    llm = pipeline("text2text-generation", 
+                   model=MODEL_NAME, 
                    max_new_tokens=MAX_NEW_TOKENS)
     print("model loaded")
 except Exception as e:
@@ -103,12 +103,6 @@ if len(retrieved_docs) == 0:
         print(json.dumps({"answer": answer, "citations": retrieved_docs, "critique": {"ok": is_valid, "score": score, "problems": problems}}, indent=2))
     sys.exit(0)
 
-def clean_answer(raw: str) -> str:
-    text = raw
-    for marker in ANS_STOP_MARKERS:
-        text = text.split(marker)[0] # take first part of model answer, don't include anything folliwng that starts a new section (signalled by stop marker)
-    return " ".join(text.split())  # collapse newlines/extra spaces
-
 def call_model():
     global answer, temp_storage
     ctx = ""
@@ -116,13 +110,11 @@ def call_model():
         ctx += f"[{r['doc']['id']}] {r['doc']['txt']}\n\n" # pass doc id in prompt instead of a counter so model's citations reference the right doc
 
     temp_storage["context"] = ctx
-    prompt = "Context:\n{}\nQuestion: {}\n\nAnswer the question based only on the context above. Cite sources using the bracketed numbers in the Context given. Be concise.\n\nAnswer:".format(ctx, temp_storage['question'])
+    prompt = "Context:\n{}\nQuestion: {}\n\nAnswer the question based only on the context above. Cite sources using the bracketed numbers in the Context. Be concise.\n\nAnswer:".format(ctx, temp_storage['question'])
     output = llm(
         prompt,
         max_new_tokens=MAX_NEW_TOKENS,
-        do_sample=False, # make the model greedy and deterministic to avoid hallucinations
-        return_full_text=False, # return answer only
-        pad_token_id=llm.tokenizer.eos_token_id,
+        do_sample=False # make the model greedy and deterministic to avoid hallucinations
     )
     raw = output[0]["generated_text"]
     answer = raw.strip().split("\n\n")[0].strip()
