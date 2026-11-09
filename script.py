@@ -2,7 +2,7 @@
 This script implements a minimal Retrieval-Augmented Generation (RAG) pipeline. It retrieves relevant documents 
 from a predefined knowledge base using TF-IDF vectorization and cosine similarity, then generates a contextual 
 response to a user-provided question using a Flan-T5 language model. The script evaluates the quality of the 
-response based on relevance, references, and length, providing a critique and confidence score. It can be run 
+response based on retrieval relevance and grounding in the retrieved docs, providing a critique and confidence score. It can be run 
 from the command line with options to specify the number of documents to retrieve and output format.
 """
 
@@ -12,7 +12,7 @@ import sys
 import numpy as np
 import re
 import json
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer, ENGLISH_STOP_WORDS
 from sklearn.metrics.pairwise import cosine_similarity
 from transformers import pipeline
 
@@ -20,6 +20,17 @@ MAX_NEW_TOKENS = 120
 MIN_SIMILARITY = 0.0
 MODEL_NAME = "google/flan-t5-base"
 DEFAULT_K = 3
+PREVIEW_CHARS = 80
+NO_ANSWER = "idk"
+
+# Critique settings. These are judgment calls, not tuned on data. Each problem has its own
+# penalty so you can see why a score dropped; valid means no problems were found.
+MIN_TOP_SCORE = 0.1         # best retrieval score below this = weak match
+MIN_GROUNDED = 0.8          # share of the answer's content words that must appear in the retrieved docs
+NO_ANSWER_PENALTY = 0.5
+LOW_RELEVANCE_PENALTY = 0.6
+UNGROUNDED_PENALTY = 0.4
+NO_DOCS_SCORE = 0.4
 
 DOCS = [
     {"id": "1", "txt": "Python is a high-level, interpreted programming language. It was created by Guido van Rossum and first released in 1991. Python emphasizes code readability with its notable use of significant whitespace."},
@@ -103,38 +114,42 @@ def generate_answer(llm, prompt):
         do_sample=False # make the model greedy and deterministic to avoid hallucinations
     )
     answer = output[0]["generated_text"].strip()
-    return answer if answer else "idk"
+    return answer if answer else NO_ANSWER
+
+
+def content_words(text):
+    """Lowercase words minus stop words and [n] citation markers."""
+    text = re.sub(r"\[\d+\]", " ", text.lower())
+    return {w for w in re.findall(r"[a-z0-9]+", text) if w not in ENGLISH_STOP_WORDS}
+
+
+def grounded_fraction(answer, retrieved_docs):
+    """Share of the answer's content words that appear in the retrieved docs (0 to 1)."""
+    answer_words = content_words(answer)
+    if not answer_words:
+        return 0.0
+    context_words = content_words(" ".join(r["doc"]["txt"] for r in retrieved_docs))
+    return len(answer_words & context_words) / len(answer_words)
 
 
 def validate_output(answer, retrieved_docs):
-    """Return (is_valid, score, problems)."""
+    """Return (is_valid, score, problems). retrieved_docs must be non-empty."""
     problems = []
     score = 1.0
 
-    if "idk" in answer.lower():
+    if answer == NO_ANSWER:
         problems.append("no info")
-        score = score * 0.5
+        score *= NO_ANSWER_PENALTY
+    elif grounded_fraction(answer, retrieved_docs) < MIN_GROUNDED:  # elif: don't also penalize "idk" as ungrounded
+        problems.append("not grounded")
+        score *= UNGROUNDED_PENALTY
 
-    if len(answer) < 20:
-        problems.append("short")
-        score = score * 0.3
+    top_score = max(r["score"] for r in retrieved_docs)  # best doc, not the average: extra low-scoring docs shouldn't drag it down
+    if top_score < MIN_TOP_SCORE:
+        problems.append("low relevance")
+        score *= LOW_RELEVANCE_PENALTY
 
-    refs = re.findall(r'\[(\d+)\]', answer)
-
-    if len(retrieved_docs) > 0:
-        if len(refs) == 0:
-            problems.append("no refs")
-            score = score * 0.7
-
-        avg = sum(r["score"] for r in retrieved_docs) / len(retrieved_docs)
-
-        if avg < 0.1:
-            problems.append("low relevance")
-            score = score * 0.6
-
-    # same as the original nested ifs
-    is_valid = score > 0.6 and len(problems) < 3
-    return is_valid, score, problems
+    return not problems, score, problems
 
 
 def print_report(question, answer, retrieved_docs, is_valid, score, problems, use_json):
@@ -145,8 +160,8 @@ def print_report(question, answer, retrieved_docs, is_valid, score, problems, us
         print("Citations:")
         for r in retrieved_docs:
             doc_text = r['doc']['txt']
-            if len(doc_text) > 80:
-                doc_text = doc_text[:80] + "..."
+            if len(doc_text) > PREVIEW_CHARS:
+                doc_text = doc_text[:PREVIEW_CHARS] + "..."
             print("  [{}] (score: {:.3f}) {}".format(r['doc']['id'], r['score'], doc_text))
     else:
         print("Citations: None")
@@ -178,7 +193,7 @@ def main():
 
     if not retrieved_docs:
         # no docs relevant to the question, no further work can be done, skip the model load and return 
-        answer, is_valid, score, problems = "idk", False, 0.4, ["no docs"]
+        answer, is_valid, score, problems = NO_ANSWER, False, NO_DOCS_SCORE, ["no docs"]
     else:
         llm = load_model()
         prompt = build_prompt(question, retrieved_docs)
