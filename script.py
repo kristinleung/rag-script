@@ -99,13 +99,11 @@ if len(retrieved_docs) == 0:
 def call_model():
     global answer, temp_storage
     ctx = ""
-    counter = 0
     for r in retrieved_docs:
-        counter += 1
-        ctx += f"[{counter}] {r['doc']['txt']}\n\n"
+        ctx += f"[{r['doc']['id']}] {r['doc']['txt']}\n\n" # pass doc id in prompt instead of a counter so model's citations reference the right doc
 
     temp_storage["context"] = ctx
-    prompt = "Context:\n{}\nQuestion: {}\n\nAnswer the question based only on the context above. Cite sources using [1], [2], etc. Be concise.\n\nAnswer:".format(ctx, temp_storage['question'])
+    prompt = "Context:\n{}\nQuestion: {}\n\nAnswer the question based only on the context above. Cite sources using the bracketed numbers in the Context given. Be concise.\n\nAnswer:".format(ctx, temp_storage['question'])
     output = llm(prompt)
     answer = output[0]['generated_text'].split("Answer:")[-1].strip()
 
